@@ -28,6 +28,7 @@ int module_id = -1;
 int checksum_len = 0;
 int relative_paths = 0;
 int module_dirlen = 0;
+int force_change = 0;
 int preserve_acls = 0;
 int preserve_times = 0;
 int preserve_xattrs = 0;
@@ -97,3 +98,23 @@ filter_rule_list daemon_filter_list;
 {
 	return "tester";
 }
+
+#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
+ int make_mutable(UNUSED(const char *fname), UNUSED(mode_t mode), UNUSED(uint32 fileflags), UNUSED(uint32 iflags))
+{
+	return 0;
+}
+
+/* Undo a prior make_mutable() call that returned a 1. */
+ int undo_make_mutable(UNUSED(const char *fname), UNUSED(uint32 fileflags))
+{
+	return 0;
+}
+#endif
+
+#ifdef SUPPORT_XATTRS
+ int x_lstat(UNUSED(const char *fname), UNUSED(STRUCT_STAT *fst), UNUSED(STRUCT_STAT *xst))
+{
+	return -1;
+}
+#endif

@@ -1045,7 +1045,7 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
 	mode = (fst.st_mode & _S_IFMT) | (fmode & ACCESSPERMS)
 	     | (S_ISDIR(fst.st_mode) ? 0700 : 0600);
 	if (fst.st_mode != mode)
-		do_chmod(fname, mode);
+		do_chmod(fname, mode, ST_FLAGS(fst));
 	if (!IS_DEVICE(fst.st_mode))
 		fst.st_rdev = 0; /* just in case */
 

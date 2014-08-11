@@ -62,6 +62,7 @@
 #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - now (HLINKED files only) */
 #define XMIT_IO_ERROR_ENDLIST (1<<12)	/* protocols 31*- now (w/XMIT_EXTENDED_FLAGS) (also protocol 30 w/'f' compat flag) */
 #define XMIT_MOD_NSEC (1<<13)		/* protocols 31 - now */
+#define XMIT_SAME_FLAGS (1<<14)		/* protocols ?? - now */
 
 /* These flags are used in the live flist data. */
 
@@ -165,6 +166,7 @@
 
 #define ATTRS_REPORT		(1<<0)
 #define ATTRS_SKIP_MTIME	(1<<1)
+#define ATTRS_DELAY_IMMUTABLE	(1<<2)
 
 #define FULL_FLUSH	1
 #define NORMAL_FLUSH	0
@@ -191,6 +193,7 @@
 #define ITEM_REPORT_GROUP (1<<6)
 #define ITEM_REPORT_ACL (1<<7)
 #define ITEM_REPORT_XATTR (1<<8)
+#define ITEM_REPORT_FFLAGS (1<<9)
 #define ITEM_BASIS_TYPE_FOLLOWS (1<<11)
 #define ITEM_XNAME_FOLLOWS (1<<12)
 #define ITEM_IS_NEW (1<<13)
@@ -522,6 +525,28 @@ typedef unsigned int size_t;
 #endif
 #endif
 
+#define NO_FFLAGS ((uint32)-1)
+
+#ifdef HAVE_CHFLAGS
+#define SUPPORT_FILEFLAGS 1
+#define SUPPORT_FORCE_CHANGE 1
+#endif
+
+#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
+#ifndef UF_NOUNLINK
+#define UF_NOUNLINK 0
+#endif
+#ifndef SF_NOUNLINK
+#define SF_NOUNLINK 0
+#endif
+#define USR_IMMUTABLE (UF_IMMUTABLE|UF_NOUNLINK|UF_APPEND)
+#define SYS_IMMUTABLE (SF_IMMUTABLE|SF_NOUNLINK|SF_APPEND)
+#define ALL_IMMUTABLE (USR_IMMUTABLE|SYS_IMMUTABLE)
+#define ST_FLAGS(st) (st.st_flags)
+#else
+#define ST_FLAGS(st) NO_FFLAGS
+#endif
+
 /* Find a variable that is either exactly 32-bits or longer.
  * If some code depends on 32-bit truncation, it will need to
  * take special action in a "#if SIZEOF_INT32 > 4" section. */
@@ -709,6 +734,7 @@ extern int file_extra_cnt;
 extern int inc_recurse;
 extern int uid_ndx;
 extern int gid_ndx;
+extern int fileflags_ndx;
 extern int acls_ndx;
 extern int xattrs_ndx;
 
@@ -750,6 +776,11 @@ extern int xattrs_ndx;
 /* When the associated option is on, all entries will have these present: */
 #define F_OWNER(f) REQ_EXTRA(f, uid_ndx)->unum
 #define F_GROUP(f) REQ_EXTRA(f, gid_ndx)->unum
+#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
+#define F_FFLAGS(f) REQ_EXTRA(f, fileflags_ndx)->unum
+#else
+#define F_FFLAGS(f) NO_FFLAGS
+#endif
 #define F_ACL(f) REQ_EXTRA(f, acls_ndx)->num
 #define F_XATTR(f) REQ_EXTRA(f, xattrs_ndx)->num
 #define F_NDX(f) REQ_EXTRA(f, unsort_ndx)->num

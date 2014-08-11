@@ -42,8 +42,10 @@ extern int preserve_devices;
 extern int preserve_specials;
 extern int preserve_hard_links;
 extern int preserve_executability;
+extern int preserve_fileflags;
 extern int preserve_perms;
 extern int preserve_times;
+extern int force_change;
 extern int delete_mode;
 extern int delete_before;
 extern int delete_during;
@@ -465,6 +467,10 @@ int unchanged_attrs(const char *fname, struct file_struct *file, stat_x *sxp)
 			return 0;
 		if (perms_differ(file, sxp))
 			return 0;
+#ifdef SUPPORT_FILEFLAGS
+		if (preserve_fileflags && sxp->st.st_flags != F_FFLAGS(file))
+			return 0;
+#endif
 		if (ownership_differs(file, sxp))
 			return 0;
 #ifdef SUPPORT_ACLS
@@ -516,6 +522,11 @@ void itemize(const char *fnamecmp, struct file_struct *file, int ndx, int statre
 		if (gid_ndx && !(file->flags & FLAG_SKIP_GROUP)
 		    && sxp->st.st_gid != (gid_t)F_GROUP(file))
 			iflags |= ITEM_REPORT_GROUP;
+#ifdef SUPPORT_FILEFLAGS
+		if (preserve_fileflags && !S_ISLNK(file->mode)
+		 && sxp->st.st_flags != F_FFLAGS(file))
+			iflags |= ITEM_REPORT_FFLAGS;
+#endif
 #ifdef SUPPORT_ACLS
 		if (preserve_acls && !S_ISLNK(file->mode)) {
 			if (!ACL_READY(*sxp))
@@ -1395,6 +1406,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 			file->mode = dest_mode(file->mode, sx.st.st_mode,
 					       dflt_perms, statret == 0);
 		}
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && !preserve_fileflags)
+			F_FFLAGS(file) = sx.st.st_flags;
+#endif
 		if (statret != 0 && basis_dir[0] != NULL) {
 			int j = try_dests_non(file, fname, ndx, fnamecmpbuf, &sx,
 					      itemizing, code);
@@ -1439,10 +1454,15 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		 * readable and writable permissions during the time we are
 		 * putting files within them.  This is then restored to the
 		 * former permissions after the transfer is done. */
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && F_FFLAGS(file) & force_change
+		 && make_mutable(fname, file->mode, F_FFLAGS(file), force_change))
+			need_retouch_dir_perms = 1;
+#endif
 #ifdef HAVE_CHMOD
 		if (!am_root && (file->mode & S_IRWXU) != S_IRWXU && dir_tweaking) {
 			mode_t mode = file->mode | S_IRWXU;
-			if (do_chmod(fname, mode) < 0) {
+			if (do_chmod(fname, mode, 0) < 0) {
 				rsyserr(FERROR_XFER, errno,
 					"failed to modify permissions on %s",
 					full_fname(fname));
@@ -1477,6 +1497,10 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 		file->mode = dest_mode(file->mode, sx.st.st_mode, dflt_perms,
 				       exists);
 	}
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change && !preserve_fileflags)
+		F_FFLAGS(file) = sx.st.st_flags;
+#endif
 
 #ifdef SUPPORT_HARD_LINKS
 	if (preserve_hard_links && F_HLINK_NOT_FIRST(file)
@@ -2045,13 +2069,17 @@ static void touch_up_dirs(struct file_list *flist, int ndx)
 			continue;
 		fname = f_name(file, NULL);
 		if (fix_dir_perms)
-			do_chmod(fname, file->mode);
+			do_chmod(fname, file->mode, 0);
 		if (need_retouch_dir_times) {
 			STRUCT_STAT st;
 			if (link_stat(fname, &st, 0) == 0
 			 && cmp_time(st.st_mtime, file->modtime) != 0)
-				set_modtime(fname, file->modtime, F_MOD_NSEC(file), file->mode);
+				set_modtime(fname, file->modtime, F_MOD_NSEC(file), file->mode, 0);
 		}
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && F_FFLAGS(file) & force_change)
+			undo_make_mutable(fname, F_FFLAGS(file));
+#endif
 		if (counter >= loopchk_limit) {
 			if (allowed_lull)
 				maybe_send_keepalive(time(NULL), MSK_ALLOW_FLUSH);

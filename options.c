@@ -55,6 +55,7 @@ int preserve_hard_links = 0;
 int preserve_acls = 0;
 int preserve_xattrs = 0;
 int preserve_perms = 0;
+int preserve_fileflags = 0;
 int preserve_executability = 0;
 int preserve_devices = 0;
 int preserve_specials = 0;
@@ -89,6 +90,7 @@ int numeric_ids = 0;
 int msgs2stderr = 0;
 int allow_8bit_chars = 0;
 int force_delete = 0;
+int force_change = 0;
 int io_timeout = 0;
 int prune_empty_dirs = 0;
 int use_qsort = 0;
@@ -574,6 +576,7 @@ static void print_rsync_version(enum logcode f)
 	char const *links = "no ";
 	char const *iconv = "no ";
 	char const *ipv6 = "no ";
+	char const *fileflags = "no ";
 	STRUCT_STAT *dumstat;
 
 #if SUBPROTOCOL_VERSION != 0
@@ -610,6 +613,9 @@ static void print_rsync_version(enum logcode f)
 #ifdef CAN_SET_SYMLINK_TIMES
 	symtimes = "";
 #endif
+#ifdef SUPPORT_FILEFLAGS
+	fileflags = "";
+#endif
 
 	rprintf(f, "%s  version %s  protocol version %d%s\n",
 		RSYNC_NAME, RSYNC_VERSION, PROTOCOL_VERSION, subprotocol);
@@ -623,8 +629,8 @@ static void print_rsync_version(enum logcode f)
 		(int)(sizeof (int64) * 8));
 	rprintf(f, "    %ssocketpairs, %shardlinks, %ssymlinks, %sIPv6, batchfiles, %sinplace,\n",
 		got_socketpair, hardlinks, links, ipv6, have_inplace);
-	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc\n",
-		have_inplace, acls, xattrs, iconv, symtimes, prealloc);
+	rprintf(f, "    %sappend, %sACLs, %sxattrs, %siconv, %ssymtimes, %sprealloc, %sfile-flags\n",
+		have_inplace, acls, xattrs, iconv, symtimes, prealloc, fileflags);
 
 #ifdef MAINTAINER_MODE
 	rprintf(f, "Panic Action: \"%s\"\n", get_panic_action());
@@ -695,6 +701,9 @@ void usage(enum logcode F)
   rprintf(F," -K, --keep-dirlinks         treat symlinked dir on receiver as dir\n");
   rprintf(F," -H, --hard-links            preserve hard links\n");
   rprintf(F," -p, --perms                 preserve permissions\n");
+#ifdef SUPPORT_FILEFLAGS
+  rprintf(F,"     --fileflags             preserve file-flags (aka chflags)\n");
+#endif
   rprintf(F," -E, --executability         preserve the file's executability\n");
   rprintf(F,"     --chmod=CHMOD           affect file and/or directory permissions\n");
 #ifdef SUPPORT_ACLS
@@ -740,7 +749,12 @@ void usage(enum logcode F)
   rprintf(F,"     --ignore-missing-args   ignore missing source args without error\n");
   rprintf(F,"     --delete-missing-args   delete missing source args from destination\n");
   rprintf(F,"     --ignore-errors         delete even if there are I/O errors\n");
-  rprintf(F,"     --force                 force deletion of directories even if not empty\n");
+  rprintf(F,"     --force-delete          force deletion of directories even if not empty\n");
+#ifdef SUPPORT_FORCE_CHANGE
+  rprintf(F,"     --force-change          affect user-/system-immutable files/dirs\n");
+  rprintf(F,"     --force-uchange         affect user-immutable files/dirs\n");
+  rprintf(F,"     --force-schange         affect system-immutable files/dirs\n");
+#endif
   rprintf(F,"     --max-delete=NUM        don't delete more than NUM files\n");
   rprintf(F,"     --max-size=SIZE         don't transfer any file larger than SIZE\n");
   rprintf(F,"     --min-size=SIZE         don't transfer any file smaller than SIZE\n");
@@ -857,6 +871,10 @@ static struct poptOption long_options[] = {
   {"perms",           'p', POPT_ARG_VAL,    &preserve_perms, 1, 0, 0 },
   {"no-perms",         0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
   {"no-p",             0,  POPT_ARG_VAL,    &preserve_perms, 0, 0, 0 },
+#ifdef SUPPORT_FILEFLAGS
+  {"fileflags",        0,  POPT_ARG_VAL,    &preserve_fileflags, 1, 0, 0 },
+  {"no-fileflags",     0,  POPT_ARG_VAL,    &preserve_fileflags, 0, 0, 0 },
+#endif
   {"executability",   'E', POPT_ARG_NONE,   &preserve_executability, 0, 0, 0 },
   {"acls",            'A', POPT_ARG_NONE,   0, 'A', 0, 0 },
   {"no-acls",          0,  POPT_ARG_VAL,    &preserve_acls, 0, 0, 0 },
@@ -943,6 +961,14 @@ static struct poptOption long_options[] = {
   {"remove-source-files",0,POPT_ARG_VAL,    &remove_source_files, 1, 0, 0 },
   {"force",            0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
   {"no-force",         0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
+  {"force-delete",     0,  POPT_ARG_VAL,    &force_delete, 1, 0, 0 },
+  {"no-force-delete",  0,  POPT_ARG_VAL,    &force_delete, 0, 0, 0 },
+#ifdef SUPPORT_FORCE_CHANGE
+  {"force-change",     0,  POPT_ARG_VAL,    &force_change, ALL_IMMUTABLE, 0, 0 },
+  {"no-force-change",  0,  POPT_ARG_VAL,    &force_change, 0, 0, 0 },
+  {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
+  {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
+#endif
   {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
   {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
   {"max-delete",       0,  POPT_ARG_INT,    &max_delete, 0, 0, 0 },
@@ -2537,6 +2563,9 @@ void server_options(char **args, int *argc_p)
 	if (xfer_dirs && !recurse && delete_mode && am_sender)
 		args[ac++] = "--no-r";
 
+	if (preserve_fileflags)
+		args[ac++] = "--fileflags";
+
 	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
 		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)
 			goto oom;
@@ -2624,6 +2653,16 @@ void server_options(char **args, int *argc_p)
 			args[ac++] = "--delete-excluded";
 		if (force_delete)
 			args[ac++] = "--force";
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change) {
+			if (force_change == ALL_IMMUTABLE)
+				args[ac++] = "--force-change";
+			else if (force_change == USR_IMMUTABLE)
+				args[ac++] = "--force-uchange";
+			else if (force_change == SYS_IMMUTABLE)
+				args[ac++] = "--force-schange";
+		}
+#endif
 		if (write_batch < 0)
 			args[ac++] = "--only-write-batch=X";
 		if (am_root > 1)

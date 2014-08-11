@@ -50,6 +50,7 @@ extern int preserve_links;
 extern int preserve_hard_links;
 extern int preserve_devices;
 extern int preserve_specials;
+extern int preserve_fileflags;
 extern int delete_during;
 extern int missing_args;
 extern int eol_nulls;
@@ -399,6 +400,9 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 {
 	static time_t modtime;
 	static mode_t mode;
+#ifdef SUPPORT_FILEFLAGS
+	static uint32 fileflags;
+#endif
 #ifdef SUPPORT_HARD_LINKS
 	static int64 dev;
 #endif
@@ -442,6 +446,14 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 		xflags |= XMIT_SAME_MODE;
 	else
 		mode = file->mode;
+#ifdef SUPPORT_FILEFLAGS
+	if (preserve_fileflags) {
+		if (F_FFLAGS(file) == fileflags)
+			xflags |= XMIT_SAME_FLAGS;
+		else
+			fileflags = F_FFLAGS(file);
+	}
+#endif
 
 	if (preserve_devices && IS_DEVICE(mode)) {
 		if (protocol_version < 28) {
@@ -583,6 +595,10 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 		write_varint(f, F_MOD_NSEC(file));
 	if (!(xflags & XMIT_SAME_MODE))
 		write_int(f, to_wire_mode(mode));
+#ifdef SUPPORT_FILEFLAGS
+	if (preserve_fileflags && !(xflags & XMIT_SAME_FLAGS))
+		write_int(f, (int)fileflags);
+#endif
 	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
 		if (protocol_version < 30)
 			write_int(f, uid);
@@ -672,6 +688,9 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 {
 	static int64 modtime;
 	static mode_t mode;
+#ifdef SUPPORT_FILEFLAGS
+	static uint32 fileflags;
+#endif
 #ifdef SUPPORT_HARD_LINKS
 	static int64 dev;
 #endif
@@ -779,6 +798,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 			modtime = first->modtime;
 			modtime_nsec = F_MOD_NSEC(first);
 			mode = first->mode;
+#ifdef SUPPORT_FILEFLAGS
+			if (preserve_fileflags)
+				fileflags = F_FFLAGS(first);
+#endif
 			if (preserve_uid)
 				uid = F_OWNER(first);
 			if (preserve_gid)
@@ -820,6 +843,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 
 	if (chmod_modes && !S_ISLNK(mode) && mode)
 		mode = tweak_mode(mode, chmod_modes);
+#ifdef SUPPORT_FILEFLAGS
+	if (preserve_fileflags && !(xflags & XMIT_SAME_FLAGS))
+		fileflags = (uint32)read_int(f);
+#endif
 
 	if (preserve_uid && !(xflags & XMIT_SAME_UID)) {
 		if (protocol_version < 30)
@@ -978,6 +1005,10 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 	}
 #endif
 	file->mode = mode;
+#ifdef SUPPORT_FILEFLAGS
+	if (preserve_fileflags)
+		F_FFLAGS(file) = fileflags;
+#endif
 	if (preserve_uid)
 		F_OWNER(file) = uid;
 	if (preserve_gid) {
@@ -1375,6 +1406,10 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
 	}
 #endif
 	file->mode = st.st_mode;
+#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
+	if (fileflags_ndx)
+		F_FFLAGS(file) = st.st_flags;
+#endif
 	if (preserve_uid)
 		F_OWNER(file) = st.st_uid;
 	if (preserve_gid)

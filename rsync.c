@@ -31,6 +31,7 @@ extern int dry_run;
 extern int preserve_acls;
 extern int preserve_xattrs;
 extern int preserve_perms;
+extern int preserve_fileflags;
 extern int preserve_executability;
 extern int preserve_times;
 extern int am_root;
@@ -452,6 +453,39 @@ mode_t dest_mode(mode_t flist_mode, mode_t stat_mode, int dflt_perms,
 	return new_mode;
 }
 
+#if defined SUPPORT_FILEFLAGS || defined SUPPORT_FORCE_CHANGE
+/* Set a file's st_flags. */
+static int set_fileflags(const char *fname, uint32 fileflags)
+{
+	if (do_chflags(fname, fileflags) != 0) {
+		rsyserr(FERROR_XFER, errno,
+			"failed to set file flags on %s",
+			full_fname(fname));
+		return 0;
+	}
+
+	return 1;
+}
+
+/* Remove immutable flags from an object, so it can be altered/removed. */
+int make_mutable(const char *fname, mode_t mode, uint32 fileflags, uint32 iflags)
+{
+	if (S_ISLNK(mode) || !(fileflags & iflags))
+		return 0;
+	if (!set_fileflags(fname, fileflags & ~iflags))
+		return -1;
+	return 1;
+}
+
+/* Undo a prior make_mutable() call that returned a 1. */
+int undo_make_mutable(const char *fname, uint32 fileflags)
+{
+	if (!set_fileflags(fname, fileflags))
+		return -1;
+	return 1;
+}
+#endif
+
 int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		   const char *fnamecmp, int flags)
 {
@@ -513,7 +547,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		if (am_root >= 0) {
 			uid_t uid = change_uid ? (uid_t)F_OWNER(file) : sxp->st.st_uid;
 			gid_t gid = change_gid ? (gid_t)F_GROUP(file) : sxp->st.st_gid;
-			if (do_lchown(fname, uid, gid) != 0) {
+			if (do_lchown(fname, uid, gid, sxp->st.st_mode, ST_FLAGS(sxp->st)) != 0) {
 				/* We shouldn't have attempted to change uid
 				 * or gid unless have the privilege. */
 				rsyserr(FERROR_XFER, errno, "%s %s failed",
@@ -549,7 +583,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		flags |= ATTRS_SKIP_MTIME;
 	if (!(flags & ATTRS_SKIP_MTIME)
 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
-		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode);
+		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode, ST_FLAGS(sxp->st));
 		if (ret < 0) {
 			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
 				full_fname(fname));
@@ -576,7 +610,7 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 
 #ifdef HAVE_CHMOD
 	if (!BITS_EQUAL(sxp->st.st_mode, new_mode, CHMOD_BITS)) {
-		int ret = am_root < 0 ? 0 : do_chmod(fname, new_mode);
+		int ret = am_root < 0 ? 0 : do_chmod(fname, new_mode, ST_FLAGS(sxp->st));
 		if (ret < 0) {
 			rsyserr(FERROR_XFER, errno,
 				"failed to set permissions on %s",
@@ -585,6 +619,19 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		}
 		if (ret == 0) /* ret == 1 if symlink could not be set */
 			updated = 1;
+	}
+#endif
+
+#ifdef SUPPORT_FILEFLAGS
+	if (preserve_fileflags && !S_ISLNK(sxp->st.st_mode)
+	 && sxp->st.st_flags != F_FFLAGS(file)) {
+		uint32 fileflags = F_FFLAGS(file);
+		if (flags & ATTRS_DELAY_IMMUTABLE)
+			fileflags &= ~ALL_IMMUTABLE;
+		if (sxp->st.st_flags != fileflags
+		 && !set_fileflags(fname, fileflags))
+			goto cleanup;
+		updated = 1;
 	}
 #endif
 
@@ -662,7 +709,8 @@ int finish_transfer(const char *fname, const char *fnametmp,
 
 	/* Change permissions before putting the file into place. */
 	set_file_attrs(fnametmp, file, NULL, fnamecmp,
-		       ok_to_set_time ? 0 : ATTRS_SKIP_MTIME);
+		       ATTRS_DELAY_IMMUTABLE
+		       | (ok_to_set_time ? 0 : ATTRS_SKIP_MTIME));
 
 	/* move tmp file over real file */
 	if (DEBUG_GTE(RECV, 1))
@@ -679,6 +727,10 @@ int finish_transfer(const char *fname, const char *fnametmp,
 	}
 	if (ret == 0) {
 		/* The file was moved into place (not copied), so it's done. */
+#ifdef SUPPORT_FILEFLAGS
+		if (preserve_fileflags && F_FFLAGS(file) & ALL_IMMUTABLE)
+			set_fileflags(fname, F_FFLAGS(file));
+#endif
 		return 1;
 	}
 	/* The file was copied, so tweak the perms of the copied file.  If it

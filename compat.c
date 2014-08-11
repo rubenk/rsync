@@ -44,9 +44,11 @@ extern int checksum_seed;
 extern int basis_dir_cnt;
 extern int prune_empty_dirs;
 extern int protocol_version;
+extern int force_change;
 extern int protect_args;
 extern int preserve_uid;
 extern int preserve_gid;
+extern int preserve_fileflags;
 extern int preserve_acls;
 extern int preserve_xattrs;
 extern int need_messages_from_generator;
@@ -64,7 +66,7 @@ extern char *iconv_opt;
 #endif
 
 /* These index values are for the file-list's extra-attribute array. */
-int uid_ndx, gid_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
+int uid_ndx, gid_ndx, fileflags_ndx, acls_ndx, xattrs_ndx, unsort_ndx;
 
 int receiver_symlink_times = 0; /* receiver can set the time on a symlink */
 int sender_symlink_iconv = 0;	/* sender should convert symlink content */
@@ -142,6 +144,8 @@ void setup_protocol(int f_out,int f_in)
 		uid_ndx = ++file_extra_cnt;
 	if (preserve_gid)
 		gid_ndx = ++file_extra_cnt;
+	if (preserve_fileflags || (force_change && !am_sender))
+		fileflags_ndx = ++file_extra_cnt;
 	if (preserve_acls && !am_sender)
 		acls_ndx = ++file_extra_cnt;
 	if (preserve_xattrs)

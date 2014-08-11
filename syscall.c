@@ -38,6 +38,7 @@ extern int am_root;
 extern int am_sender;
 extern int read_only;
 extern int list_only;
+extern int force_change;
 extern int preserve_perms;
 extern int preserve_executability;
 
@@ -55,7 +56,23 @@ int do_unlink(const char *fname)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return unlink(fname);
+	if (unlink(fname) == 0)
+		return 0;
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change && errno == EPERM) {
+		STRUCT_STAT st;
+
+		if (x_lstat(fname, &st, NULL) == 0
+		 && make_mutable(fname, st.st_mode, st.st_flags, force_change) > 0) {
+			if (unlink(fname) == 0)
+				return 0;
+			undo_make_mutable(fname, st.st_flags);
+		}
+		/* TODO: handle immutable directories */
+		errno = EPERM;
+	}
+#endif
+	return -1;
 }
 
 #ifdef SUPPORT_LINKS
@@ -116,14 +133,37 @@ int do_link(const char *fname1, const char *fname2)
 }
 #endif
 
-int do_lchown(const char *path, uid_t owner, gid_t group)
+int do_lchown(const char *path, uid_t owner, gid_t group, mode_t mode, uint32 fileflags)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
 #ifndef HAVE_LCHOWN
 #define lchown chown
 #endif
-	return lchown(path, owner, group);
+	if (lchown(path, owner, group) == 0)
+		return 0;
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change && errno == EPERM) {
+		if (fileflags == NO_FFLAGS) {
+			STRUCT_STAT st;
+			if (x_lstat(path, &st, NULL) == 0) {
+				mode = st.st_mode;
+				fileflags = st.st_flags;
+			}
+		}
+		if (fileflags != NO_FFLAGS
+		 && make_mutable(path, mode, fileflags, force_change) > 0) {
+			int ret = lchown(path, owner, group);
+			undo_make_mutable(path, fileflags);
+			if (ret == 0)
+				return 0;
+		}
+		errno = EPERM;
+	}
+#else
+	mode = fileflags = 0; /* avoid compiler warning */
+#endif
+	return -1;
 }
 
 int do_mknod(const char *pathname, mode_t mode, dev_t dev)
@@ -163,7 +203,7 @@ int do_mknod(const char *pathname, mode_t mode, dev_t dev)
 			return -1;
 		close(sock);
 #ifdef HAVE_CHMOD
-		return do_chmod(pathname, mode);
+		return do_chmod(pathname, mode, 0);
 #else
 		return 0;
 #endif
@@ -180,7 +220,22 @@ int do_rmdir(const char *pathname)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return rmdir(pathname);
+	if (rmdir(pathname) == 0)
+		return 0;
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change && errno == EPERM) {
+		STRUCT_STAT st;
+
+		if (x_lstat(pathname, &st, NULL) == 0
+		 && make_mutable(pathname, st.st_mode, st.st_flags, force_change) > 0) {
+			if (rmdir(pathname) == 0)
+				return 0;
+			undo_make_mutable(pathname, st.st_flags);
+		}
+		errno = EPERM;
+	}
+#endif
+	return -1;
 }
 
 int do_open(const char *pathname, int flags, mode_t mode)
@@ -194,7 +249,7 @@ int do_open(const char *pathname, int flags, mode_t mode)
 }
 
 #ifdef HAVE_CHMOD
-int do_chmod(const char *path, mode_t mode)
+int do_chmod(const char *path, mode_t mode, uint32 fileflags)
 {
 	int code;
 	if (dry_run) return 0;
@@ -217,9 +272,37 @@ int do_chmod(const char *path, mode_t mode)
 	} else
 		code = chmod(path, mode & CHMOD_BITS); /* DISCOURAGED FUNCTION */
 #endif /* !HAVE_LCHMOD */
+#ifdef SUPPORT_FORCE_CHANGE
+	if (code < 0 && force_change && errno == EPERM && !S_ISLNK(mode)) {
+		if (fileflags == NO_FFLAGS) {
+			STRUCT_STAT st;
+			if (x_lstat(path, &st, NULL) == 0)
+				fileflags = st.st_flags;
+		}
+		if (fileflags != NO_FFLAGS
+		 && make_mutable(path, mode, fileflags, force_change) > 0) {
+			code = chmod(path, mode & CHMOD_BITS);
+			undo_make_mutable(path, fileflags);
+			if (code == 0)
+				return 0;
+		}
+		errno = EPERM;
+	}
+#else
+	fileflags = 0; /* avoid compiler warning */
+#endif
 	if (code != 0 && (preserve_perms || preserve_executability))
 		return code;
 	return 0;
+}
+#endif
+
+#ifdef HAVE_CHFLAGS
+int do_chflags(const char *path, uint32 fileflags)
+{
+	if (dry_run) return 0;
+	RETURN_ERROR_IF_RO_OR_LO;
+	return chflags(path, fileflags);
 }
 #endif
 
@@ -227,7 +310,36 @@ int do_rename(const char *fname1, const char *fname2)
 {
 	if (dry_run) return 0;
 	RETURN_ERROR_IF_RO_OR_LO;
-	return rename(fname1, fname2);
+	if (rename(fname1, fname2) == 0)
+		return 0;
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change && errno == EPERM) {
+		STRUCT_STAT st1, st2;
+		int became_mutable;
+
+		if (x_lstat(fname1, &st1, NULL) != 0)
+			goto failed;
+		became_mutable = make_mutable(fname1, st1.st_mode, st1.st_flags, force_change) > 0;
+		if (became_mutable && rename(fname1, fname2) == 0)
+			goto success;
+		if (x_lstat(fname2, &st2, NULL) == 0
+		 && make_mutable(fname2, st2.st_mode, st2.st_flags, force_change) > 0) {
+			if (rename(fname1, fname2) == 0) {
+			  success:
+				if (became_mutable) /* Yes, use fname2 and st1! */
+					undo_make_mutable(fname2, st1.st_flags);
+				return 0;
+			}
+			undo_make_mutable(fname2, st2.st_flags);
+		}
+		/* TODO: handle immutable directories */
+		if (became_mutable)
+			undo_make_mutable(fname1, st1.st_flags);
+	  failed:
+		errno = EPERM;
+	}
+#endif
+	return -1;
 }
 
 #ifdef HAVE_FTRUNCATE

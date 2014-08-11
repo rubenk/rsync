@@ -26,6 +26,9 @@
 #if defined CONFIG_LOCALE && defined HAVE_LOCALE_H
 #include <locale.h>
 #endif
+#ifdef SUPPORT_FORCE_CHANGE
+#include <sys/sysctl.h>
+#endif
 
 extern int dry_run;
 extern int list_only;
@@ -51,6 +54,7 @@ extern int copy_unsafe_links;
 extern int keep_dirlinks;
 extern int preserve_hard_links;
 extern int protocol_version;
+extern int force_change;
 extern int file_total;
 extern int recurse;
 extern int xfer_dirs;
@@ -838,6 +842,22 @@ static int do_recv(int f_in, int f_out, char *local_name)
 	/* The receiving side mustn't obey this, or an existing symlink that
 	 * points to an identical file won't be replaced by the referent. */
 	copy_links = copy_dirlinks = copy_unsafe_links = 0;
+
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change & SYS_IMMUTABLE) {
+		/* Determine whether we'll be able to unlock a system immutable item. */
+		int mib[2];
+		int securityLevel = 0;
+		size_t len = sizeof securityLevel;
+
+		mib[0] = CTL_KERN;
+		mib[1] = KERN_SECURELVL;
+		if (sysctl(mib, 2, &securityLevel, &len, NULL, 0) == 0 && securityLevel > 0) {
+			rprintf(FERROR, "System security level is too high to force mutability on system immutable files and directories.\n");
+			exit_cleanup(RERR_UNSUPPORTED);
+		}
+	}
+#endif
 
 #ifdef SUPPORT_HARD_LINKS
 	if (preserve_hard_links && !inc_recurse)

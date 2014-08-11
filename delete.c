@@ -25,6 +25,7 @@
 extern int am_root;
 extern int make_backups;
 extern int max_delete;
+extern int force_change;
 extern char *backup_dir;
 extern char *backup_suffix;
 extern int backup_suffix_len;
@@ -97,8 +98,12 @@ static enum delret delete_dir_contents(char *fname, uint16 flags)
 		}
 
 		strlcpy(p, fp->basename, remainder);
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change)
+			make_mutable(fname, fp->mode, F_FFLAGS(fp), force_change);
+#endif
 		if (!(fp->mode & S_IWUSR) && !am_root && fp->flags & FLAG_OWNED_BY_US)
-			do_chmod(fname, fp->mode | S_IWUSR);
+			do_chmod(fname, fp->mode | S_IWUSR, NO_FFLAGS);
 		/* Save stack by recursing to ourself directly. */
 		if (S_ISDIR(fp->mode)) {
 			if (delete_dir_contents(fname, flags | DEL_RECURSE) != DR_SUCCESS)
@@ -139,11 +144,18 @@ enum delret delete_item(char *fbuf, uint16 mode, uint16 flags)
 	}
 
 	if (flags & DEL_NO_UID_WRITE)
-		do_chmod(fbuf, mode | S_IWUSR);
+		do_chmod(fbuf, mode | S_IWUSR, NO_FFLAGS);
 
 	if (S_ISDIR(mode) && !(flags & DEL_DIR_IS_EMPTY)) {
 		/* This only happens on the first call to delete_item() since
 		 * delete_dir_contents() always calls us w/DEL_DIR_IS_EMPTY. */
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change) {
+			STRUCT_STAT st;
+			if (x_lstat(fbuf, &st, NULL) == 0)
+				make_mutable(fbuf, st.st_mode, st.st_flags, force_change);
+		}
+#endif
 		ignore_perishable = 1;
 		/* If DEL_RECURSE is not set, this just reports emptiness. */
 		ret = delete_dir_contents(fbuf, flags);

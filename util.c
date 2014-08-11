@@ -33,6 +33,7 @@ extern int relative_paths;
 extern int preserve_times;
 extern int preserve_xattrs;
 extern int preallocate_files;
+extern int force_change;
 extern char *module_dir;
 extern unsigned int module_dirlen;
 extern char *partial_dir;
@@ -115,9 +116,36 @@ void print_child_argv(const char *prefix, char **cmd)
 	rprintf(FCLIENT, " (%d args)\n", cnt);
 }
 
+#ifdef SUPPORT_FORCE_CHANGE
+static int try_a_force_change(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode, uint32 fileflags)
+{
+	if (fileflags == NO_FFLAGS) {
+		STRUCT_STAT st;
+		if (x_lstat(fname, &st, NULL) == 0)
+			fileflags = st.st_flags;
+	}
+
+	if (fileflags != NO_FFLAGS && make_mutable(fname, mode, fileflags, force_change) > 0) {
+		int ret, save_force_change = force_change;
+
+		force_change = 0; /* Make certain we can't come back here. */
+		ret = set_modtime(fname, modtime, mod_nsec, mode, fileflags);
+		force_change = save_force_change;
+
+		undo_make_mutable(fname, fileflags);
+
+		return ret;
+	}
+
+	errno = EPERM;
+
+	return -1;
+}
+#endif
+
 /* This returns 0 for success, 1 for a symlink if symlink time-setting
  * is not possible, or -1 for any other error. */
-int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
+int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode, uint32 fileflags)
 {
 	static int switch_step = 0;
 
@@ -132,6 +160,11 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
 #include "case_N.h"
 		if (do_utimensat(fname, modtime, mod_nsec) == 0)
 			break;
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && errno == EPERM
+		 && try_a_force_change(fname, modtime, mod_nsec, mode, fileflags) == 0)
+			break;
+#endif
 		if (errno != ENOSYS)
 			return -1;
 		switch_step++;
@@ -142,6 +175,11 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
 #include "case_N.h"
 		if (do_lutimes(fname, modtime, mod_nsec) == 0)
 			break;
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && errno == EPERM
+		 && try_a_force_change(fname, modtime, mod_nsec, mode, fileflags) == 0)
+			break;
+#endif
 		if (errno != ENOSYS)
 			return -1;
 		switch_step++;
@@ -164,6 +202,13 @@ int set_modtime(const char *fname, time_t modtime, uint32 mod_nsec, mode_t mode)
 #else
 		if (do_utime(fname, modtime, mod_nsec) == 0)
 			break;
+#endif
+#ifdef SUPPORT_FORCE_CHANGE
+		if (force_change && errno == EPERM
+		 && try_a_force_change(fname, modtime, mod_nsec, mode, fileflags) == 0)
+			break;
+#else
+		fileflags = 0; /* avoid compiler warning */
 #endif
 
 		return -1;
