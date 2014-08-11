@@ -30,6 +30,7 @@
 extern int dry_run;
 extern int preserve_acls;
 extern int preserve_xattrs;
+extern int force_change;
 extern int preserve_perms;
 extern int preserve_fileflags;
 extern int preserve_executability;
@@ -517,6 +518,11 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 
 	if (daemon_chmod_modes && !S_ISLNK(new_mode))
 		new_mode = tweak_mode(new_mode, daemon_chmod_modes);
+
+#ifdef SUPPORT_FORCE_CHANGE
+	if (force_change)
+		make_mutable(fname, sxp->st.st_mode, sxp->st.st_flags, force_change);
+#endif
 
 #ifdef SUPPORT_ACLS
 	if (preserve_acls && !S_ISLNK(file->mode) && !ACL_READY(*sxp))
