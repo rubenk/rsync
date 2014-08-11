@@ -33,6 +33,7 @@ extern int am_generator;
 extern int read_only;
 extern int list_only;
 extern int preserve_xattrs;
+extern int preserve_hfs_compression;
 extern int preserve_links;
 extern int preserve_devices;
 extern int preserve_specials;
@@ -40,6 +41,10 @@ extern int checksum_seed;
 
 #define RSYNC_XAL_INITIAL 5
 #define RSYNC_XAL_LIST_INITIAL 100
+
+#define GXD_NO_MISSING_ERROR (1<<0)
+#define GXD_OMIT_COMPRESSED (1<<1)
+#define GXD_FILE_IS_COMPRESSED (1<<2)
 
 #define MAX_FULL_DATUM 32
 
@@ -72,6 +77,17 @@ extern int checksum_seed;
 #define XACC_ACL_ATTR RSYNC_PREFIX "%" XACC_ACL_SUFFIX
 #define XDEF_ACL_SUFFIX "dacl"
 #define XDEF_ACL_ATTR RSYNC_PREFIX "%" XDEF_ACL_SUFFIX
+
+#define APPLE_PREFIX "com.apple."
+#define APLPRE_LEN ((int)sizeof APPLE_PREFIX - 1)
+#define DECMPFS_SUFFIX "decmpfs"
+#define RESOURCEFORK_SUFFIX "ResourceFork"
+
+#define UNREAD_DATA ((char *)1)
+
+#if MAX_DIGEST_LEN < SIZEOF_TIME_T
+#error MAX_DIGEST_LEN is too small to hold an mtime
+#endif
 
 typedef struct {
 	char *datum, *name;
@@ -167,8 +183,7 @@ static ssize_t get_xattr_names(const char *fname)
 /* On entry, the *len_ptr parameter contains the size of the extra space we
  * should allocate when we create a buffer for the data.  On exit, it contains
  * the length of the datum. */
-static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr,
-			    int no_missing_error)
+static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr, int flags)
 {
 	size_t datum_len = sys_lgetxattr(fname, name, NULL, 0);
 	size_t extra_len = *len_ptr;
@@ -177,12 +192,21 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
 	*len_ptr = datum_len;
 
 	if (datum_len == (size_t)-1) {
-		if (errno == ENOTSUP || no_missing_error)
+		if (errno == ENOTSUP || flags & GXD_NO_MISSING_ERROR)
 			return NULL;
 		rsyserr(FERROR_XFER, errno,
 			"get_xattr_data: lgetxattr(\"%s\",\"%s\",0) failed",
 			full_fname(fname), name);
 		return NULL;
+	}
+
+	if (flags & GXD_OMIT_COMPRESSED && datum_len > MAX_FULL_DATUM
+	 && HAS_PREFIX(name, APPLE_PREFIX)
+	 && (strcmp(name+APLPRE_LEN, DECMPFS_SUFFIX) == 0
+	  || (flags & GXD_FILE_IS_COMPRESSED && strcmp(name+APLPRE_LEN, RESOURCEFORK_SUFFIX) == 0))) {
+		/* If we are omitting compress-file-related data, we don't want to
+		 * actually read this data. */
+		return UNREAD_DATA;
 	}
 
 	if (!datum_len && !extra_len)
@@ -213,7 +237,29 @@ static char *get_xattr_data(const char *fname, const char *name, size_t *len_ptr
 	return ptr;
 }
 
-static int rsync_xal_get(const char *fname, item_list *xalp)
+static void checksum_xattr_data(char *sum, const char *datum, size_t datum_len, stat_x *sxp)
+{
+	if (datum == UNREAD_DATA) {
+		/* For abbreviated compressed data, we store the file's mtime as the checksum. */
+		SIVAL(sum, 0, sxp->st.st_mtime);
+#if SIZEOF_TIME_T > 4
+		SIVAL(sum, 4, sxp->st.st_mtime >> 32);
+#if MAX_DIGEST_LEN > 8
+		memset(sum + 8, 0, MAX_DIGEST_LEN - 8);
+#endif
+#else
+#if MAX_DIGEST_LEN > 4
+		memset(sum + 4, 0, MAX_DIGEST_LEN - 4);
+#endif
+#endif
+	} else {
+		sum_init(checksum_seed);
+		sum_update(datum, datum_len);
+		sum_end(sum);
+	}
+}
+
+static int rsync_xal_get(const char *fname, stat_x *sxp)
 {
 	ssize_t list_len, name_len;
 	size_t datum_len, name_offset;
@@ -222,7 +268,8 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
 	int user_only = am_sender ? 0 : !am_root;
 #endif
 	rsync_xa *rxa;
-	int count;
+	int count, flags;
+	item_list *xalp = sxp->xattr;
 
 	/* This puts the name list into the "namebuf" buffer. */
 	if ((list_len = get_xattr_names(fname)) < 0)
@@ -252,20 +299,22 @@ static int rsync_xal_get(const char *fname, item_list *xalp)
 		}
 
 		datum_len = name_len; /* Pass extra size to get_xattr_data() */
-		if (!(ptr = get_xattr_data(fname, name, &datum_len, 0)))
+		flags = GXD_OMIT_COMPRESSED;
+		if (preserve_hfs_compression && sxp->st.st_flags & UF_COMPRESSED)
+			flags |= GXD_FILE_IS_COMPRESSED;
+		if (!(ptr = get_xattr_data(fname, name, &datum_len, flags)))
 			return -1;
 
 		if (datum_len > MAX_FULL_DATUM) {
 			/* For large datums, we store a flag and a checksum. */
+			char *datum = ptr;
 			name_offset = 1 + MAX_DIGEST_LEN;
-			sum_init(checksum_seed);
-			sum_update(ptr, datum_len);
-			free(ptr);
-
 			if (!(ptr = new_array(char, name_offset + name_len)))
 				out_of_memory("rsync_xal_get");
 			*ptr = XSTATE_ABBREV;
-			sum_end(ptr + 1);
+			checksum_xattr_data(ptr+1, datum, datum_len, sxp);
+			if (datum != UNREAD_DATA)
+				free(datum);
 		} else
 			name_offset = datum_len;
 
@@ -311,7 +360,7 @@ int get_xattr(const char *fname, stat_x *sxp)
 	} else if (IS_MISSING_FILE(sxp->st))
 		return 0;
 
-	if (rsync_xal_get(fname, sxp->xattr) < 0) {
+	if (rsync_xal_get(fname, sxp) < 0) {
 		free_xattr(sxp);
 		return -1;
 	}
@@ -346,6 +395,8 @@ int copy_xattrs(const char *source, const char *dest)
 		datum_len = 0;
 		if (!(ptr = get_xattr_data(source, name, &datum_len, 0)))
 			return -1;
+		if (ptr == UNREAD_DATA)
+			continue; /* XXX Is this right? */
 		if (sys_lsetxattr(dest, name, ptr, datum_len) < 0) {
 			int save_errno = errno ? errno : EINVAL;
 			rsyserr(FERROR_XFER, errno,
@@ -362,6 +413,10 @@ int copy_xattrs(const char *source, const char *dest)
 
 static int find_matching_xattr(item_list *xalp)
 {
+#ifdef HAVE_OSX_XATTRS
+	xalp = NULL;
+	return -1; /* find_matching_xattr is a waste of cycles for MOSX clients */
+#else
 	size_t i, j;
 	item_list *lst = rsync_xal_l.items;
 
@@ -395,6 +450,7 @@ static int find_matching_xattr(item_list *xalp)
 	}
 
 	return -1;
+#endif
 }
 
 /* Store *xalp on the end of rsync_xal_l */
@@ -574,11 +630,13 @@ void send_xattr_request(const char *fname, struct file_struct *file, int f_out)
 
 			/* Re-read the long datum. */
 			if (!(ptr = get_xattr_data(fname, rxa->name, &len, 0))) {
-				rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
+				if (errno != ENOTSUP && errno != ENOATTR)
+					rprintf(FERROR_XFER, "failed to re-read xattr %s for %s\n", rxa->name, fname);
 				write_varint(f_out, 0);
 				continue;
 			}
 
+			assert(ptr != UNREAD_DATA);
 			write_varint(f_out, len); /* length might have changed! */
 			write_bigbuf(f_out, ptr, len);
 			free(ptr);
@@ -795,7 +853,7 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
 	int user_only = am_root <= 0;
 #endif
 	size_t name_len;
-	int ret = 0;
+	int flags, ret = 0;
 
 	/* This puts the current name list into the "namebuf" buffer. */
 	if ((list_len = get_xattr_names(fname)) < 0)
@@ -807,7 +865,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
 		if (XATTR_ABBREV(rxas[i])) {
 			/* See if the fnamecmp version is identical. */
 			len = name_len = rxas[i].name_len;
-			if ((ptr = get_xattr_data(fnamecmp, name, &len, 1)) == NULL) {
+			flags = GXD_OMIT_COMPRESSED | GXD_NO_MISSING_ERROR;
+			if (preserve_hfs_compression && sxp->st.st_flags & UF_COMPRESSED)
+				flags |= GXD_FILE_IS_COMPRESSED;
+			if ((ptr = get_xattr_data(fnamecmp, name, &len, flags)) == NULL) {
 			  still_abbrev:
 				if (am_generator)
 					continue;
@@ -816,14 +877,14 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
 				ret = -1;
 				continue;
 			}
+			if (ptr == UNREAD_DATA)
+				continue; /* XXX Is this right? */
 			if (len != rxas[i].datum_len) {
 				free(ptr);
 				goto still_abbrev;
 			}
 
-			sum_init(checksum_seed);
-			sum_update(ptr, len);
-			sum_end(sum);
+			checksum_xattr_data(sum, ptr, len, sxp);
 			if (memcmp(sum, rxas[i].datum + 1, MAX_DIGEST_LEN) != 0) {
 				free(ptr);
 				goto still_abbrev;
@@ -892,6 +953,10 @@ static int rsync_xal_set(const char *fname, item_list *xalp,
 		}
 	}
 
+#ifdef HAVE_OSX_XATTRS
+	rsync_xal_free(xalp); /* Free this because we aren't using find_matching_xattr(). */
+#endif
+
 	return ret;
 }
 
@@ -938,7 +1003,7 @@ char *get_xattr_acl(const char *fname, int is_access_acl, size_t *len_p)
 {
 	const char *name = is_access_acl ? XACC_ACL_ATTR : XDEF_ACL_ATTR;
 	*len_p = 0; /* no extra data alloc needed from get_xattr_data() */
-	return get_xattr_data(fname, name, len_p, 1);
+	return get_xattr_data(fname, name, len_p, GXD_NO_MISSING_ERROR);
 }
 
 int set_xattr_acl(const char *fname, int is_access_acl, const char *buf, size_t buf_len)
@@ -1081,11 +1146,33 @@ int set_stat_xattr(const char *fname, struct file_struct *file, mode_t new_mode)
 	return 0;
 }
 
+#ifdef SUPPORT_HFS_COMPRESSION
+static inline void hfs_compress_tweaks(STRUCT_STAT *fst)
+{
+	if (fst->st_flags & UF_COMPRESSED) {
+		if (preserve_hfs_compression) {
+			/* We're sending the compression xattr, not the decompressed data fork.
+			 * Setting rsync's idea of the file size to 0 effectively prevents the
+			 * transfer of the data fork. */
+			fst->st_size = 0;
+		} else {
+			/* If the sender's filesystem supports compression, then we'll be able
+			 * to send the decompressed data fork and the decmpfs xattr will be
+			 * hidden (not sent). As such, we need to strip the compression flag. */
+			fst->st_flags &= ~UF_COMPRESSED;
+		}
+	}
+}
+#endif
+
 int x_stat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
 {
 	int ret = do_stat(fname, fst);
 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
 		xst->st_mode = 0;
+#ifdef SUPPORT_HFS_COMPRESSION
+	hfs_compress_tweaks(fst);
+#endif
 	return ret;
 }
 
@@ -1094,6 +1181,9 @@ int x_lstat(const char *fname, STRUCT_STAT *fst, STRUCT_STAT *xst)
 	int ret = do_lstat(fname, fst);
 	if ((ret < 0 || get_stat_xattr(fname, -1, fst, xst) < 0) && xst)
 		xst->st_mode = 0;
+#ifdef SUPPORT_HFS_COMPRESSION
+	hfs_compress_tweaks(fst);
+#endif
 	return ret;
 }
 
@@ -1102,6 +1192,9 @@ int x_fstat(int fd, STRUCT_STAT *fst, STRUCT_STAT *xst)
 	int ret = do_fstat(fd, fst);
 	if ((ret < 0 || get_stat_xattr(NULL, fd, fst, xst) < 0) && xst)
 		xst->st_mode = 0;
+#ifdef SUPPORT_HFS_COMPRESSION
+	hfs_compress_tweaks(fst);
+#endif
 	return ret;
 }
 

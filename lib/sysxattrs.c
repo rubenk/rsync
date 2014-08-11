@@ -22,10 +22,17 @@
 #include "rsync.h"
 #include "sysxattrs.h"
 
+extern int preserve_hfs_compression;
+
 #ifdef SUPPORT_XATTRS
 
 #ifdef HAVE_OSX_XATTRS
+#ifndef XATTR_SHOWCOMPRESSION
+#define XATTR_SHOWCOMPRESSION 0x0020
+#endif
 #define GETXATTR_FETCH_LIMIT (64*1024*1024)
+
+int xattr_options = XATTR_NOFOLLOW;
 #endif
 
 #if defined HAVE_LINUX_XATTRS
@@ -59,7 +66,12 @@ ssize_t sys_llistxattr(const char *path, char *list, size_t size)
 
 ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t size)
 {
-	ssize_t len = getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
+	ssize_t len;
+
+	if (preserve_hfs_compression)
+		xattr_options |= XATTR_SHOWCOMPRESSION;
+
+	len = getxattr(path, name, value, size, 0, xattr_options);
 
 	/* If we're retrieving data, handle resource forks > 64MB specially */
 	if (value != NULL && len == GETXATTR_FETCH_LIMIT && (size_t)len < size) {
@@ -67,7 +79,7 @@ ssize_t sys_lgetxattr(const char *path, const char *name, void *value, size_t si
 		u_int32_t offset = len;
 		size_t data_retrieved = len;
 		while (data_retrieved < size) {
-			len = getxattr(path, name, value + offset, size - data_retrieved, offset, XATTR_NOFOLLOW);
+			len = getxattr(path, name, value + offset, size - data_retrieved, offset, xattr_options);
 			if (len <= 0)
 				break;
 			data_retrieved += len;
@@ -91,12 +103,16 @@ int sys_lsetxattr(const char *path, const char *name, const void *value, size_t 
 
 int sys_lremovexattr(const char *path, const char *name)
 {
-	return removexattr(path, name, XATTR_NOFOLLOW);
+	if (preserve_hfs_compression)
+		xattr_options |= XATTR_SHOWCOMPRESSION;
+	return removexattr(path, name, xattr_options);
 }
 
 ssize_t sys_llistxattr(const char *path, char *list, size_t size)
 {
-	return listxattr(path, list, size, XATTR_NOFOLLOW);
+	if (preserve_hfs_compression)
+		xattr_options |= XATTR_SHOWCOMPRESSION;
+	return listxattr(path, list, size, xattr_options);
 }
 
 #elif HAVE_FREEBSD_XATTRS

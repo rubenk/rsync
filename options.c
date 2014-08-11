@@ -54,6 +54,7 @@ int preserve_links = 0;
 int preserve_hard_links = 0;
 int preserve_acls = 0;
 int preserve_xattrs = 0;
+int preserve_hfs_compression = 0;
 int preserve_perms = 0;
 int preserve_fileflags = 0;
 int preserve_executability = 0;
@@ -713,6 +714,10 @@ void usage(enum logcode F)
 #ifdef SUPPORT_XATTRS
   rprintf(F," -X, --xattrs                preserve extended attributes\n");
 #endif
+#ifdef SUPPORT_HFS_COMPRESSION
+  rprintf(F,"     --hfs-compression       preserve HFS compression if supported\n");
+  rprintf(F,"     --protect-decmpfs       preserve HFS compression as xattrs\n");
+#endif
   rprintf(F," -o, --owner                 preserve owner (super-user only)\n");
   rprintf(F," -g, --group                 preserve group\n");
   rprintf(F,"     --devices               preserve device files (super-user only)\n");
@@ -973,6 +978,12 @@ static struct poptOption long_options[] = {
   {"no-force-change",  0,  POPT_ARG_VAL,    &force_change, 0, 0, 0 },
   {"force-uchange",    0,  POPT_ARG_VAL,    &force_change, USR_IMMUTABLE, 0, 0 },
   {"force-schange",    0,  POPT_ARG_VAL,    &force_change, SYS_IMMUTABLE, 0, 0 },
+#endif
+#ifdef SUPPORT_HFS_COMPRESSION
+  {"hfs-compression",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 1, 0, 0 },
+  {"no-hfs-compression",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
+  {"protect-decmpfs",  0,  POPT_ARG_VAL,    &preserve_hfs_compression, 2, 0, 0 },
+  {"no-protect-decmpfs",0, POPT_ARG_VAL,    &preserve_hfs_compression, 0, 0, 0 },
 #endif
   {"ignore-errors",    0,  POPT_ARG_VAL,    &ignore_errors, 1, 0, 0 },
   {"no-ignore-errors", 0,  POPT_ARG_VAL,    &ignore_errors, 0, 0, 0 },
@@ -1974,6 +1985,15 @@ int parse_arguments(int *argc_p, const char ***argv_p)
 	}
 #endif
 
+#ifdef SUPPORT_HFS_COMPRESSION
+	if (preserve_hfs_compression) {
+		if (!preserve_xattrs)
+			preserve_xattrs = 1;
+		if (!preserve_fileflags)
+			preserve_fileflags = 1;
+	}
+#endif
+
 	if (block_size > MAX_BLOCK_SIZE) {
 		snprintf(err_buf, sizeof err_buf,
 			 "--block-size=%lu is too large (max: %u)\n", block_size, MAX_BLOCK_SIZE);
@@ -2572,6 +2592,11 @@ void server_options(char **args, int *argc_p)
 
 	if (preserve_fileflags)
 		args[ac++] = "--fileflags";
+
+#ifdef SUPPORT_HFS_COMPRESSION
+	if (preserve_hfs_compression)
+		args[ac++] = preserve_hfs_compression == 1 ? "--hfs-compression" : "--protect-decmpfs";
+#endif
 
 	if (do_compression && def_compress_level != Z_DEFAULT_COMPRESSION) {
 		if (asprintf(&arg, "--compress-level=%d", def_compress_level) < 0)

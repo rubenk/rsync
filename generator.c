@@ -37,6 +37,7 @@ extern int implied_dirs;
 extern int keep_dirlinks;
 extern int preserve_acls;
 extern int preserve_xattrs;
+extern int preserve_hfs_compression;
 extern int preserve_links;
 extern int preserve_devices;
 extern int preserve_specials;
@@ -1762,6 +1763,14 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 					fname, fnamecmpbuf);
 			}
 			sx.st.st_size = F_LENGTH(fuzzy_file);
+#ifdef SUPPORT_HFS_COMPRESSION
+			if (sx.st.st_flags & UF_COMPRESSED) {
+				if (preserve_hfs_compression)
+					sx.st.st_size = 0;
+				else
+					sx.st.st_flags &= ~UF_COMPRESSED;
+			}
+#endif
 			statret = 0;
 			fnamecmp = fnamecmpbuf;
 		}
@@ -1928,6 +1937,18 @@ static void recv_generator(char *fname, struct file_struct *file, int ndx,
 	}
 	if (read_batch)
 		goto cleanup;
+
+#ifdef SUPPORT_HFS_COMPRESSION
+	if (F_FFLAGS(file) & UF_COMPRESSED) {
+		/* At this point the attrs have already been copied, we don't need to transfer a data fork
+		 * If my filesystem doesn't support HFS compression, the existing file's content
+		 * will not be automatically truncated, so we'll do that manually here */
+		if (preserve_hfs_compression && sx.st.st_size > 0) {
+			if (ftruncate(fd, 0) == 0)
+				sx.st.st_size = 0;
+		}
+	}
+#endif
 
 	if (statret != 0 || whole_file)
 		write_sum_head(f_out, NULL);

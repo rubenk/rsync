@@ -1583,6 +1583,9 @@ static struct file_struct *send_file_name(int f, struct file_list *flist,
 #ifdef SUPPORT_XATTRS
 		if (preserve_xattrs) {
 			sx.st.st_mode = file->mode;
+			if (preserve_fileflags)
+				sx.st.st_flags = F_FFLAGS(file);
+			sx.st.st_mtime = file->modtime; /* get_xattr needs mtime for decmpfs xattrs */
 			if (get_xattr(fname, &sx) < 0) {
 				io_error |= IOERR_GENERAL;
 				return NULL;

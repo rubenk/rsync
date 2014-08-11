@@ -29,6 +29,10 @@
 #ifdef SUPPORT_FORCE_CHANGE
 #include <sys/sysctl.h>
 #endif
+#ifdef SUPPORT_HFS_COMPRESSION
+#include <sys/attr.h> /* For getattrlist() */
+#include <sys/mount.h> /* For statfs() */
+#endif
 
 extern int dry_run;
 extern int list_only;
@@ -53,6 +57,7 @@ extern int copy_dirlinks;
 extern int copy_unsafe_links;
 extern int keep_dirlinks;
 extern int preserve_hard_links;
+extern int preserve_hfs_compression;
 extern int protocol_version;
 extern int force_change;
 extern int file_total;
@@ -107,6 +112,7 @@ int daemon_over_rsh = 0;
 mode_t orig_umask = 0;
 int batch_gen_fd = -1;
 int sender_keeps_checksum = 0;
+int fs_supports_hfs_compression = 0;
 
 /* There's probably never more than at most 2 outstanding child processes,
  * but set it higher, just in case. */
@@ -559,6 +565,43 @@ static pid_t do_cmd(char *cmd, char *machine, char *user, char **remote_argv, in
 	return 0; /* not reached */
 }
 
+#ifdef SUPPORT_HFS_COMPRESSION
+static void hfs_receiver_check(void)
+{
+	struct statfs fsb;
+	struct attrlist attrs;
+	struct {
+		int32_t len;
+		vol_capabilities_set_t caps;
+	} attrData;
+
+	if (preserve_hfs_compression != 1)
+		return; /* Nothing to check if --hfs-compression option isn't enabled. */
+
+	if (statfs(".", &fsb) < 0) {
+		rsyserr(FERROR, errno, "statfs %s failed", curr_dir);
+		exit_cleanup(RERR_FILESELECT);
+	}
+
+	bzero(&attrs, sizeof attrs);
+	attrs.bitmapcount = ATTR_BIT_MAP_COUNT;
+	attrs.volattr = ATTR_VOL_CAPABILITIES;
+
+	bzero(&attrData, sizeof attrData);
+	attrData.len = sizeof attrData;
+
+	if (getattrlist(fsb.f_mntonname, &attrs, &attrData, sizeof attrData, 0) < 0) {
+		rsyserr(FERROR, errno, "getattrlist %s failed", curr_dir);
+		exit_cleanup(RERR_FILESELECT);
+	}
+
+	if (!(attrData.caps[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_DECMPFS_COMPRESSION)) {
+		rprintf(FERROR, "The destination filesystem does not support HFS+ compression.\n");
+		exit_cleanup(RERR_UNSUPPORTED);
+	}
+}
+#endif
+
 /* The receiving side operates in one of two modes:
  *
  * 1. it receives any number of files into a destination directory,
@@ -617,6 +660,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 				exit_cleanup(RERR_FILESELECT);
 			}
 			filesystem_dev = st.st_dev; /* ensures --force works right w/-x */
+#ifdef SUPPORT_HFS_COMPRESSION
+			hfs_receiver_check();
+#endif
 			return NULL;
 		}
 		if (file_total > 1) {
@@ -677,7 +723,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 				full_fname(dest_path));
 			exit_cleanup(RERR_FILESELECT);
 		}
-
+#ifdef SUPPORT_HFS_COMPRESSION
+		hfs_receiver_check();
+#endif
 		return NULL;
 	}
 
@@ -697,6 +745,9 @@ static char *get_local_name(struct file_list *flist, char *dest_path)
 			full_fname(dest_path));
 		exit_cleanup(RERR_FILESELECT);
 	}
+#ifdef SUPPORT_HFS_COMPRESSION
+	hfs_receiver_check();
+#endif
 	*cp = '/';
 
 	return cp + 1;

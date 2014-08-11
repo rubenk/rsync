@@ -367,6 +367,8 @@ to the detailed description below for a complete description.  verb(
      --chmod=CHMOD           affect file and/or directory permissions
  -A, --acls                  preserve ACLs (implies -p)
  -X, --xattrs                preserve extended attributes
+     --hfs-compression       preserve HFS compression if supported
+     --protect-decmpfs       preserve HFS compression as xattrs
  -o, --owner                 preserve owner (super-user only)
  -g, --group                 preserve group
      --devices               preserve device files (super-user only)
@@ -1134,6 +1136,42 @@ dit(bf(--force-schange)) This option causes rsync to disable system-immutable
 flags on files and directories that are being updated or deleted on the
 receiving side.  It does not try to affect user flags.  This option overrides
 bf(--force-change) and bf(--force-uchange).
+
+dit(bf(--hfs-compression)) This option causes rsync to preserve HFS+
+compression if the destination filesystem supports it.  If the destination
+does not support it, rsync will exit with an error.
+
+Filesystem compression was introduced to HFS+ in Mac OS 10.6. A file that is
+compressed has no data in its data fork. Rather, the compressed data is stored
+in an extended attribute named com.apple.decmpfs and a file flag is set to
+indicate that the file is compressed (UF_COMPRESSED). HFS+ decompresses this
+data "on-the-fly" and presents it to the operating system as a normal file.
+Normal attempts to copy compressed files (e.g. in the Finder, via cp, ditto,
+etc.) will copy the file's decompressed contents, remove the UF_COMPRESSED file
+flag, and discard the com.apple.decmpfs extended attribute. This option will
+preserve the data in the com.apple.decmpfs extended attribute and ignore the
+synthesized data in the file contents.
+
+This option implies both bf(--fileflags) and (--xattrs).
+
+dit(bf(--protect-decmpfs)) The com.apple.decmpfs extended attribute is hidden
+by default from list/get xattr calls, therefore normal attempts to copy
+compressed files will functionally decompress those files. While this is
+desirable behavior when copying files to filesystems that do not support HFS+
+compression, it has serious performance and capacity impacts when backing up
+or restoring the Mac OS X filesystem.
+
+This option will transfer the com.apple.decmpfs extended attribute regardless
+of support on the destination. If a source file is compressed and an existing
+file on the destination is not compressed, the data fork of the destination
+file will be truncated and the com.apple.decmpfs xattr will be transferred
+instead. Note that compressed files will not be readable to the operating
+system of the destination if that operating system does not support HFS+
+compression. Once restored (with or without this option) to an operating system
+that supports HFS+ compression, however, these files will be accessible as
+usual.
+
+This option implies bf(--fileflags) and bf(--xattrs).
 
 dit(bf(--chmod)) This option tells rsync to apply one or more
 comma-separated "chmod" modes to the permission of the files in the

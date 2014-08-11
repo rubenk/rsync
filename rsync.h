@@ -549,6 +549,17 @@ typedef unsigned int size_t;
 #define ST_FLAGS(st) NO_FFLAGS
 #endif
 
+#ifndef UF_COMPRESSED
+#define UF_COMPRESSED 0x00000020
+#endif
+#ifndef VOL_CAP_FMT_DECMPFS_COMPRESSION
+#define VOL_CAP_FMT_DECMPFS_COMPRESSION 0x00010000
+#endif
+
+#if defined SUPPORT_XATTRS && defined SUPPORT_FILEFLAGS
+#define SUPPORT_HFS_COMPRESSION 1
+#endif
+
 /* Find a variable that is either exactly 32-bits or longer.
  * If some code depends on 32-bit truncation, it will need to
  * take special action in a "#if SIZEOF_INT32 > 4" section. */

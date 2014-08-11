@@ -573,8 +573,14 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 #ifdef SUPPORT_XATTRS
 	if (am_root < 0)
 		set_stat_xattr(fname, file, new_mode);
-	if (preserve_xattrs && fnamecmp)
+	if (preserve_xattrs && fnamecmp) {
+		uint32 tmpflags = sxp->st.st_flags;
+		sxp->st.st_flags = F_FFLAGS(file); /* set_xattr() needs to check UF_COMPRESSED */
 		set_xattr(fname, file, fnamecmp, sxp);
+		sxp->st.st_flags = tmpflags;
+		if (S_ISDIR(sxp->st.st_mode))
+			link_stat(fname, &sx2.st, 0);
+	}
 #endif
 
 	if (!preserve_times
@@ -585,6 +591,9 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 	if (sxp->st.st_ino == 2 && S_ISDIR(sxp->st.st_mode))
 		flags |= ATTRS_SKIP_CRTIME;
 	if (!(flags & ATTRS_SKIP_MTIME)
+#ifdef SUPPORT_HFS_COMPRESSION
+	    && !(sxp->st.st_flags & UF_COMPRESSED) /* setting this alters mtime, so defer to after set_fileflags */
+#endif
 	    && cmp_time(sxp->st.st_mtime, file->modtime) != 0) {
 		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), sxp->st.st_mode, ST_FLAGS(sxp->st));
 		if (ret < 0) {
@@ -643,6 +652,16 @@ int set_file_attrs(const char *fname, struct file_struct *file, stat_x *sxp,
 		 && !set_fileflags(fname, fileflags))
 			goto cleanup;
 		updated = 1;
+#ifdef SUPPORT_HFS_COMPRESSION
+		int ret = set_modtime(fname, file->modtime, F_MOD_NSEC(file), new_mode, fileflags);
+		if (ret < 0) {
+			rsyserr(FERROR_XFER, errno, "failed to set times on %s",
+				full_fname(fname));
+			goto cleanup;
+		}
+		if (ret != 0)
+			file->flags |= FLAG_TIME_FAILED;
+#endif
 	}
 #endif
 
