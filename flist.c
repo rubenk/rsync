@@ -54,6 +54,7 @@ extern int preserve_fileflags;
 extern int delete_during;
 extern int missing_args;
 extern int eol_nulls;
+extern int crtimes_ndx;
 extern int relative_paths;
 extern int implied_dirs;
 extern int ignore_perishable;
@@ -398,7 +399,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 #endif
 			    int ndx, int first_ndx)
 {
-	static time_t modtime;
+	static time_t modtime, crtime;
 	static mode_t mode;
 #ifdef SUPPORT_FILEFLAGS
 	static uint32 fileflags;
@@ -509,6 +510,13 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 		modtime = file->modtime;
 	if (NSEC_BUMP(file) && protocol_version >= 31)
 		xflags |= XMIT_MOD_NSEC;
+	if (crtimes_ndx) {
+		time_t file_crtime = f_crtime(file);
+		if (file_crtime == modtime)
+			xflags |= XMIT_CRTIME_EQ_MTIME;
+		else
+			crtime = file_crtime;
+	}
 
 #ifdef SUPPORT_HARD_LINKS
 	if (tmp_dev != -1) {
@@ -593,6 +601,8 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 	}
 	if (xflags & XMIT_MOD_NSEC)
 		write_varint(f, F_MOD_NSEC(file));
+	if (crtimes_ndx && !(xflags & XMIT_CRTIME_EQ_MTIME))
+		write_varlong(f, crtime, 4);
 	if (!(xflags & XMIT_SAME_MODE))
 		write_int(f, to_wire_mode(mode));
 #ifdef SUPPORT_FILEFLAGS
@@ -686,7 +696,7 @@ static void send_file_entry(int f, const char *fname, struct file_struct *file,
 
 static struct file_struct *recv_file_entry(int f, struct file_list *flist, int xflags)
 {
-	static int64 modtime;
+	static int64 modtime, crtime;
 	static mode_t mode;
 #ifdef SUPPORT_FILEFLAGS
 	static uint32 fileflags;
@@ -838,6 +848,19 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 		modtime_nsec = read_varint(f);
 	else
 		modtime_nsec = 0;
+	if (crtimes_ndx) {
+		if (!(xflags & XMIT_CRTIME_EQ_MTIME)) {
+			crtime = read_varlong(f, 4);
+#if SIZEOF_TIME_T < SIZEOF_INT64
+			if (!am_generator && (int64)(time_t)crtime != crtime) {
+				rprintf(FERROR_XFER,
+				    "Create time value of %s truncated on receiver.\n",
+				    lastname);
+			}
+#endif
+		} else
+			crtime = modtime;
+	}
 	if (!(xflags & XMIT_SAME_MODE))
 		mode = from_wire_mode(read_int(f));
 
@@ -1015,6 +1038,8 @@ static struct file_struct *recv_file_entry(int f, struct file_list *flist, int x
 		F_GROUP(file) = gid;
 		file->flags |= gid_flags;
 	}
+	if (crtimes_ndx)
+		f_crtime_set(file, (time_t)crtime);
 	if (unsort_ndx)
 		F_NDX(file) = flist->used + flist->ndx_start;
 
@@ -1416,6 +1441,8 @@ struct file_struct *make_file(const char *fname, struct file_list *flist,
 		F_GROUP(file) = st.st_gid;
 	if (am_generator && st.st_uid == our_uid)
 		file->flags |= FLAG_OWNED_BY_US;
+	if (crtimes_ndx)
+		f_crtime_set(file, get_create_time(fname));
 
 	if (basename != thisname)
 		file->dirname = lastdir;

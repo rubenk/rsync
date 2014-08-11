@@ -62,7 +62,8 @@
 #define XMIT_HLINK_FIRST (1<<12)	/* protocols 30 - now (HLINKED files only) */
 #define XMIT_IO_ERROR_ENDLIST (1<<12)	/* protocols 31*- now (w/XMIT_EXTENDED_FLAGS) (also protocol 30 w/'f' compat flag) */
 #define XMIT_MOD_NSEC (1<<13)		/* protocols 31 - now */
-#define XMIT_SAME_FLAGS (1<<14)		/* protocols ?? - now */
+#define XMIT_CRTIME_EQ_MTIME (1<<14)	/* protocols ?? - now */
+#define XMIT_SAME_FLAGS (1<<15)		/* protocols ?? - now */
 
 /* These flags are used in the live flist data. */
 
@@ -167,6 +168,7 @@
 #define ATTRS_REPORT		(1<<0)
 #define ATTRS_SKIP_MTIME	(1<<1)
 #define ATTRS_DELAY_IMMUTABLE	(1<<2)
+#define ATTRS_SKIP_CRTIME	(1<<3)
 
 #define FULL_FLUSH	1
 #define NORMAL_FLUSH	0
@@ -183,7 +185,7 @@
 #define FNAMECMP_FUZZY		0x83
 
 /* For use by the itemize_changes code */
-#define ITEM_REPORT_ATIME (1<<0)
+#define ITEM_REPORT_CRTIME (1<<0)
 #define ITEM_REPORT_CHANGE (1<<1)
 #define ITEM_REPORT_SIZE (1<<2)     /* regular files only */
 #define ITEM_REPORT_TIMEFAIL (1<<2) /* symlinks only */
@@ -734,6 +736,7 @@ extern int file_extra_cnt;
 extern int inc_recurse;
 extern int uid_ndx;
 extern int gid_ndx;
+extern int crtimes_ndx;
 extern int fileflags_ndx;
 extern int acls_ndx;
 extern int xattrs_ndx;
@@ -741,6 +744,7 @@ extern int xattrs_ndx;
 #define FILE_STRUCT_LEN (offsetof(struct file_struct, basename))
 #define EXTRA_LEN (sizeof (union file_extras))
 #define PTR_EXTRA_CNT ((sizeof (char *) + EXTRA_LEN - 1) / EXTRA_LEN)
+#define TIME_EXTRA_CNT ((SIZEOF_TIME_T + EXTRA_LEN - 1) / EXTRA_LEN)
 #define DEV_EXTRA_CNT 2
 #define DIRNODE_EXTRA_CNT 3
 #define SUM_EXTRA_CNT ((MAX_DIGEST_LEN + EXTRA_LEN - 1) / EXTRA_LEN)
@@ -1022,6 +1026,7 @@ typedef struct {
 
 typedef struct {
     STRUCT_STAT st;
+    time_t crtime;
 #ifdef SUPPORT_ACLS
     struct rsync_acl *acc_acl; /* access ACL */
     struct rsync_acl *def_acl; /* default ACL */

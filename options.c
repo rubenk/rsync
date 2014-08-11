@@ -62,6 +62,7 @@ int preserve_specials = 0;
 int preserve_uid = 0;
 int preserve_gid = 0;
 int preserve_times = 0;
+int preserve_crtimes = 0;
 int update_only = 0;
 int cvs_exclude = 0;
 int dry_run = 0;
@@ -718,6 +719,7 @@ void usage(enum logcode F)
   rprintf(F,"     --specials              preserve special files\n");
   rprintf(F," -D                          same as --devices --specials\n");
   rprintf(F," -t, --times                 preserve modification times\n");
+  rprintf(F," -N, --crtimes               preserve create times (newness)\n");
   rprintf(F," -O, --omit-dir-times        omit directories from --times\n");
   rprintf(F," -J, --omit-link-times       omit symlinks from --times\n");
   rprintf(F,"     --super                 receiver attempts super-user activities\n");
@@ -885,6 +887,9 @@ static struct poptOption long_options[] = {
   {"times",           't', POPT_ARG_VAL,    &preserve_times, 1, 0, 0 },
   {"no-times",         0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
   {"no-t",             0,  POPT_ARG_VAL,    &preserve_times, 0, 0, 0 },
+  {"crtimes",         'N', POPT_ARG_VAL,    &preserve_crtimes, 1, 0, 0 },
+  {"no-crtimes",       0,  POPT_ARG_VAL,    &preserve_crtimes, 0, 0, 0 },
+  {"no-N",             0,  POPT_ARG_VAL,    &preserve_crtimes, 0, 0, 0 },
   {"omit-dir-times",  'O', POPT_ARG_VAL,    &omit_dir_times, 1, 0, 0 },
   {"no-omit-dir-times",0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
   {"no-O",             0,  POPT_ARG_VAL,    &omit_dir_times, 0, 0, 0 },
@@ -2465,6 +2470,8 @@ void server_options(char **args, int *argc_p)
 		argstr[x++] = 'D';
 	if (preserve_times)
 		argstr[x++] = 't';
+	if (preserve_crtimes)
+		argstr[x++] = 'N';
 	if (preserve_perms)
 		argstr[x++] = 'p';
 	else if (preserve_executability && am_sender)

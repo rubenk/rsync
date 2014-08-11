@@ -43,6 +43,28 @@ free_xbuf(xbuf *xb)
 	memset(xb, 0, sizeof (xbuf));
 }
 
+static inline time_t
+f_crtime(struct file_struct *fp)
+{
+#if SIZEOF_TIME_T > 4
+	time_t crtime;
+	memcpy(&crtime, &REQ_EXTRA(fp, crtimes_ndx)->unum, SIZEOF_TIME_T);
+	return crtime;
+#else
+	return REQ_EXTRA(fp, crtimes_ndx)->unum;
+#endif
+}
+
+static inline void
+f_crtime_set(struct file_struct *fp, time_t crtime)
+{
+#if SIZEOF_TIME_T > 4
+	memcpy(&REQ_EXTRA(fp, crtimes_ndx)->unum, &crtime, SIZEOF_TIME_T);
+#else
+	REQ_EXTRA(fp, crtimes_ndx)->unum = (uint32)crtime;
+#endif
+}
+
 static inline int
 to_wire_mode(mode_t mode)
 {

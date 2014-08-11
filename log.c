@@ -723,7 +723,8 @@ static void log_formatted(enum logcode code, const char *format, const char *op,
 			c[8] = !(iflags & ITEM_REPORT_FFLAGS) ? '.' : 'f';
 			c[9] = !(iflags & ITEM_REPORT_ACL) ? '.' : 'a';
 			c[10] = !(iflags & ITEM_REPORT_XATTR) ? '.' : 'x';
-			c[11] = '\0';
+			c[11] = !(iflags & ITEM_REPORT_CRTIME) ? '.' : 'n';
+			c[12] = '\0';
 
 			if (iflags & (ITEM_IS_NEW|ITEM_MISSING_DATA)) {
 				char ch = iflags & ITEM_IS_NEW ? '+' : '?';

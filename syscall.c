@@ -42,6 +42,13 @@ extern int force_change;
 extern int preserve_perms;
 extern int preserve_executability;
 
+#pragma pack(push, 4)
+struct create_time {
+	uint32 length;
+	struct timespec crtime;
+};
+#pragma pack(pop)
+
 #define RETURN_ERROR_IF(x,e) \
 	do { \
 		if (x) { \
@@ -458,6 +465,36 @@ OFF_T do_lseek(int fd, OFF_T offset, int whence)
 #else
 	return lseek(fd, offset, whence);
 #endif
+}
+
+time_t get_create_time(const char *path)
+{
+	static struct create_time attrBuf;
+	struct attrlist attrList;
+
+	memset(&attrList, 0, sizeof attrList);
+	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+	attrList.commonattr = ATTR_CMN_CRTIME;
+	if (getattrlist(path, &attrList, &attrBuf, sizeof attrBuf, FSOPT_NOFOLLOW) < 0)
+		return 0;
+	return attrBuf.crtime.tv_sec;
+}
+
+int set_create_time(const char *path, time_t crtime)
+{
+	struct attrlist attrList;
+	struct timespec ts;
+
+	if (dry_run) return 0;
+	RETURN_ERROR_IF_RO_OR_LO;
+
+	ts.tv_sec = crtime;
+	ts.tv_nsec = 0;
+
+	memset(&attrList, 0, sizeof attrList);
+	attrList.bitmapcount = ATTR_BIT_MAP_COUNT;
+	attrList.commonattr = ATTR_CMN_CRTIME;
+	return setattrlist(path, &attrList, &ts, sizeof ts, FSOPT_NOFOLLOW);
 }
 
 #ifdef HAVE_UTIMENSAT

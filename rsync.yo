@@ -373,6 +373,7 @@ to the detailed description below for a complete description.  verb(
      --specials              preserve special files
  -D                          same as --devices --specials
  -t, --times                 preserve modification times
+ -N, --crtimes               preserve create times (newness)
  -O, --omit-dir-times        omit directories from --times
  -J, --omit-link-times       omit symlinks from --times
      --super                 receiver attempts super-user activities
@@ -1200,6 +1201,9 @@ modified cannot be effective; in other words, a missing bf(-t) or bf(-a) will
 cause the next transfer to behave as if it used bf(-I), causing all files to be
 updated (though rsync's delta-transfer algorithm will make the update fairly efficient
 if the files haven't actually changed, you're much better off using bf(-t)).
+
+dit(bf(-N, --crtimes)) This tells rsync to set the create times (newness) of
+the destination files to the same value as the source files.
 
 dit(bf(-O, --omit-dir-times)) This tells rsync to omit directories when
 it is preserving modification times (see bf(--times)).  If NFS is sharing
@@ -2103,7 +2107,7 @@ with older versions of rsync, but that also turns on the output of other
 verbose messages).
 
 The "%i" escape has a cryptic output that is 11 letters long.  The general
-format is like the string bf(YXcstpogfax), where bf(Y) is replaced by the
+format is like the string bf(YXcstpogfaxn), where bf(Y) is replaced by the
 type of update being done, bf(X) is replaced by the file-type, and the
 other letters represent attributes that may be output if they are being
 modified.
@@ -2162,6 +2166,8 @@ quote(itemization(
   it() The bf(f) means that the fileflags information changed.
   it() The bf(a) means that the ACL information changed.
   it() The bf(x) means that the extended attribute information changed.
+  it() A bf(n) means the create time (newness) is different and is being
+  updated to the sender's value (requires bf(--crtimes)).
 ))
 
 One other output is possible:  when deleting files, the "%i" will output

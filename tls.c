@@ -109,6 +109,8 @@ static int stat_xattr(const char *fname, STRUCT_STAT *fst)
 
 #endif
 
+static int display_crtimes = 0;
+
 static void failed(char const *what, char const *where)
 {
 	fprintf(stderr, PROGRAM ": %s %s: %s\n",
@@ -116,16 +118,44 @@ static void failed(char const *what, char const *where)
 	exit(1);
 }
 
+static void storetime(char *dest, size_t destsize, time_t t, int nsecs)
+{
+	if (t) {
+		int len;
+		struct tm *mt = gmtime(&t);
+
+		len = snprintf(dest, destsize,
+			"%04d-%02d-%02d %02d:%02d:%02d",
+			(int)mt->tm_year + 1900,
+			(int)mt->tm_mon + 1,
+			(int)mt->tm_mday,
+			(int)mt->tm_hour,
+			(int)mt->tm_min,
+			(int)mt->tm_sec);
+		if (nsecs >= 0 && len >= 0)
+			snprintf(dest + len, destsize - len, ".%09d", nsecs);
+	} else {
+		int has_nsecs = nsecs >= 0 ? 1 : 0;
+		int len = MIN(19 + 9*has_nsecs, (int)destsize - 1);
+		memset(dest, ' ', len);
+		dest[len] = '\0';
+	}
+}
+
 static void list_file(const char *fname)
 {
 	STRUCT_STAT buf;
+	time_t crtime = 0;
 	char permbuf[PERMSTRING_SIZE];
-	struct tm *mt;
-	char datebuf[50];
+	char mtimebuf[50];
+	char crtimebuf[50];
 	char linkbuf[4096];
+	int nsecs;
 
 	if (do_lstat(fname, &buf) < 0)
 		failed("stat", fname);
+	if (display_crtimes && (crtime = get_create_time(fname)) == 0)
+		failed("get_create_time", fname);
 #ifdef SUPPORT_XATTRS
 	if (am_root < 0)
 		stat_xattr(fname, &buf);
@@ -159,30 +189,17 @@ static void list_file(const char *fname)
 	}
 
 	permstring(permbuf, buf.st_mode);
-
-	if (buf.st_mtime) {
-		int len;
-		mt = gmtime(&buf.st_mtime);
-
-		len = snprintf(datebuf, sizeof datebuf,
-			"%04d-%02d-%02d %02d:%02d:%02d",
-			(int)mt->tm_year + 1900,
-			(int)mt->tm_mon + 1,
-			(int)mt->tm_mday,
-			(int)mt->tm_hour,
-			(int)mt->tm_min,
-			(int)mt->tm_sec);
 #ifdef ST_MTIME_NSEC
-		if (nsec_times) {
-			snprintf(datebuf + len, sizeof datebuf - len,
-				".%09d", (int)buf.ST_MTIME_NSEC);
-		}
+	if (nsec_times)
+		nsecs = (int)buf.ST_MTIME_NSEC;
+	else
 #endif
-	} else {
-		int len = MIN(19 + 9*nsec_times, (int)sizeof datebuf - 1);
-		memset(datebuf, ' ', len);
-		datebuf[len] = '\0';
-	}
+		nsecs = -1;
+	storetime(mtimebuf, sizeof mtimebuf, buf.st_mtime, nsecs);
+	if (display_crtimes)
+		storetime(crtimebuf, sizeof crtimebuf, crtime, -1);
+	else
+		crtimebuf[0] = '\0';
 
 	/* TODO: Perhaps escape special characters in fname? */
 
@@ -193,13 +210,14 @@ static void list_file(const char *fname)
 		    (long)minor(buf.st_rdev));
 	} else
 		printf("%15s", do_big_num(buf.st_size, 1, NULL));
-	printf(" %6ld.%-6ld %6ld %s %s%s\n",
+	printf(" %6ld.%-6ld %6ld %s%s%s%s\n",
 	       (long)buf.st_uid, (long)buf.st_gid, (long)buf.st_nlink,
-	       datebuf, fname, linkbuf);
+	       mtimebuf, crtimebuf, fname, linkbuf);
 }
 
 static struct poptOption long_options[] = {
   /* longName, shortName, argInfo, argPtr, value, descrip, argDesc */
+  {"crtimes",         'N', POPT_ARG_NONE,   &display_crtimes, 0, 0, 0},
   {"link-times",      'l', POPT_ARG_NONE,   &link_times, 0, 0, 0 },
   {"link-owner",      'L', POPT_ARG_NONE,   &link_owner, 0, 0, 0 },
 #ifdef SUPPORT_XATTRS
@@ -218,6 +236,7 @@ static void tls_usage(int ret)
   fprintf(F,"usage: " PROGRAM " [OPTIONS] FILE ...\n");
   fprintf(F,"Trivial file listing program for portably checking rsync\n");
   fprintf(F,"\nOptions:\n");
+  fprintf(F," -N, --crtimes               display create times (newness)\n");
   fprintf(F," -l, --link-times            display the time on a symlink\n");
   fprintf(F," -L, --link-owner            display the owner+group on a symlink\n");
 #ifdef SUPPORT_XATTRS
